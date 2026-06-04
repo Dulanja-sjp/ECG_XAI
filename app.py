@@ -10,7 +10,6 @@ import cv2
 # Load Model
 # -----------------------------
 model = load_model("ecg_multiclass_model.h5")
-
 class_names = ["Normal", "PVC", "AF", "Arrhythmia"]
 
 
@@ -89,6 +88,138 @@ def get_risk_level(result):
 
 
 # -----------------------------
+# Single Beat Feature Explanation
+# -----------------------------
+def extract_ecg_features(signal, predicted_result):
+    signal = np.array(signal).flatten()
+
+    features = {
+        "heart_rate": "Estimated",
+        "heart_rate_impact": 0,
+        "qrs_width": "Estimated",
+        "qrs_width_impact": 0,
+        "rr_interval": "Single beat input",
+        "rr_impact": 0
+    }
+
+    # Estimate QRS Width from one beat
+    try:
+        mean_val = np.mean(signal)
+        max_val = np.max(signal)
+
+        threshold = mean_val + 0.6 * (max_val - mean_val)
+
+        qrs_points = np.where(signal > threshold)[0]
+
+        if len(qrs_points) > 0:
+            qrs_width_samples = qrs_points[-1] - qrs_points[0]
+
+            qrs_width_ms = round((qrs_width_samples / 200) * 1000, 2)
+
+            features["qrs_width"] = qrs_width_ms
+
+            if qrs_width_ms > 120:
+                features["qrs_width_impact"] = 40
+            elif qrs_width_ms > 100:
+                features["qrs_width_impact"] = 25
+            else:
+                features["qrs_width_impact"] = 10
+
+    except:
+        pass
+
+    # Class-based explanation rules
+    if predicted_result == "Normal":
+        features["heart_rate"] = "Normal range"
+        features["heart_rate_impact"] = 5
+        features["rr_interval"] = "Regular"
+        features["rr_impact"] = 5
+
+    elif predicted_result == "PVC":
+        features["heart_rate"] = "May be elevated"
+        features["heart_rate_impact"] = 30
+        features["qrs_width_impact"] = max(features["qrs_width_impact"], 40)
+        features["rr_interval"] = "Irregular beat pattern"
+        features["rr_impact"] = 20
+
+    elif predicted_result == "AF":
+        features["heart_rate"] = "Often irregular/elevated"
+        features["heart_rate_impact"] = 30
+        features["rr_interval"] = "Irregular RR rhythm"
+        features["rr_impact"] = 20
+        features["qrs_width_impact"] = max(features["qrs_width_impact"], 15)
+
+    elif predicted_result == "Arrhythmia":
+        features["heart_rate"] = "Abnormal rhythm suspected"
+        features["heart_rate_impact"] = 30
+        features["rr_interval"] = "Irregular rhythm"
+        features["rr_impact"] = 20
+        features["qrs_width_impact"] = max(features["qrs_width_impact"], 30)
+
+    return features
+
+
+# -----------------------------
+# Display Feature Explanation
+# -----------------------------
+def show_feature_explanation(signal, predicted_result):
+    st.subheader("ECG Feature Explanation")
+
+    features = extract_ecg_features(signal, predicted_result)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Heart Rate",
+            f"{features['heart_rate']}",
+            f"+{features['heart_rate_impact']}%"
+        )
+        st.progress(features["heart_rate_impact"] / 100)
+
+    with col2:
+        st.metric(
+            "QRS Width",
+            f"{features['qrs_width']} ms",
+            f"+{features['qrs_width_impact']}%"
+        )
+        st.progress(features["qrs_width_impact"] / 100)
+
+    with col3:
+        st.metric(
+            "RR Interval",
+            f"{features['rr_interval']}",
+            f"+{features['rr_impact']}%"
+        )
+        st.progress(features["rr_impact"] / 100)
+
+    total_impact = (
+        features["heart_rate_impact"]
+        + features["qrs_width_impact"]
+        + features["rr_impact"]
+    )
+
+    st.info(
+        f"""
+        Explanation Summary:
+
+        Heart Rate = {features['heart_rate']}  
+        Impact = +{features['heart_rate_impact']}%
+
+        QRS Width = {features['qrs_width']} ms  
+        Impact = +{features['qrs_width_impact']}%
+
+        RR Interval = {features['rr_interval']}  
+        Impact = +{features['rr_impact']}%
+
+        Total Explanation Score = {total_impact}%
+
+        Note: This ECG input contains only one beat. Therefore, Heart Rate and RR Interval are estimated using prediction-based explanation rules.
+        """
+    )
+
+
+# -----------------------------
 # Main Dashboard
 # -----------------------------
 st.title("ECG Explainable AI Dashboard")
@@ -161,6 +292,8 @@ with tab1:
             """
         )
 
+        show_feature_explanation(signal_1d, result)
+
 
 # -----------------------------
 # TAB 2: ECG Image Upload
@@ -212,6 +345,8 @@ with tab2:
             st.error(f"Risk Level: {risk}")
 
         st.write(f"Confidence: {confidence:.2f}%")
+
+        show_feature_explanation(extracted_signal, result)
 
         st.warning(
             """
